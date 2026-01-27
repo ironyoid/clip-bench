@@ -1,0 +1,24 @@
+services:
+  clip-bench:
+    # image: swr.ru-moscow-1.hc.sbercloud.ru/srobotics-perception/em_ros.x86:latest-stable
+    image: clip-bench:latest
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+      args:
+        BASE_IMAGE: nvcr.io/nvidia/pytorch:23.12-py3
+    network_mode: host
+    privileged: true
+    # shm_size: 32g
+    runtime: nvidia
+    volumes:
+      - ./:/home/user/clip-bench
+      - ./data:/home/user/clip-bench/data
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["jupyter", "notebook"]
