@@ -1,6 +1,5 @@
 services:
   clip-bench:
-    # image: swr.ru-moscow-1.hc.sbercloud.ru/srobotics-perception/em_ros.x86:latest-stable
     image: clip-bench:latest
     build:
       context: .
