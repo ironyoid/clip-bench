@@ -92,9 +92,9 @@ def compute_metrics(text_features, image_features, caption_to_image, query_batch
         hits10 += int(np.sum(np.any(indices == gt[:, None], axis=1)))
 
     return {
-        "R@1": hits1 / num_caps * 100.0,
-        "R@5": hits5 / num_caps * 100.0,
-        "R@10": hits10 / num_caps * 100.0,
+        "R1": hits1 / num_caps * 100.0,
+        "R5": hits5 / num_caps * 100.0,
+        "R10": hits10 / num_caps * 100.0,
     }
 
 
@@ -137,7 +137,8 @@ def main():
         caption_to_image,
         query_batch=query_batch * 4,
     )
-    print(t2i_metrics)
+    print(
+        f"R@1: {t2i_metrics['R1']:2f} R@5: {t2i_metrics['R5']:2f} R@10: {t2i_metrics['R10']:2f}")
 
 
 if __name__ == "__main__":
