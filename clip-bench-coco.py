@@ -3,13 +3,14 @@ import faiss
 import eccv_caption
 from omegaconf import OmegaConf
 from lavis.models import load_preprocess
-from lavis.models.albef_models.albef_retrieval import AlbefRetrieval
+from lavis.models.blip_models.blip_image_text_matching import BlipITM
 import clip
 import torch
 from PIL import Image
 import json
 import os
 import time
+import contextlib
 
 
 DATASET_PATH = "dataset/coco2014"
@@ -18,9 +19,9 @@ DATA_DIR = f"{DATASET_PATH}/eccv/data"
 MODEL_NAME = "ViT-B/32"
 IMAGE_BATCH = 64
 TEXT_BATCH = 256
-RETRIEVE_K = 100
-ALBEF_IMAGE_BATCH = 32
-ALBEF_CFG_PATH = "albef_retrieval_base.yaml"
+RETRIEVE_K = 50
+BLIP_ITM_IMAGE_BATCH = 2
+BLIP_ITM_CFG_PATH = "blip_itm_base_pretrain.yaml"
 
 
 def load_karpathy_test(ann_path, coco_root):
@@ -163,6 +164,63 @@ def rerank_t2i_with_albef(albef_model, albef_preprocess, captions, image_paths, 
     return reranked
 
 
+def blip_rerank(blip_model, blip_preprocess, captions, image_paths, t2i_rank, batch_size, device):
+    amp_ctx = (
+        torch.autocast(device_type=device, dtype=torch.float16)
+        if device in ("cuda", "mps")
+        else contextlib.nullcontext()
+    )
+    image_feats = []
+    total = len(image_paths)
+    for i in range(0, total, batch_size):
+        batch_start = time.time()
+        batch_paths = image_paths[i:i + batch_size]
+        images = [blip_preprocess(Image.open(p).convert("RGB"))
+                  for p in batch_paths]
+        image_input = torch.stack(images).to(device)
+        with torch.no_grad(), amp_ctx:
+            batch_feats = blip_model.visual_encoder.forward_features(
+                image_input)
+        image_feats.append(batch_feats.cpu())
+        done = min(i + batch_size, total)
+        batch_time = time.time() - batch_start
+        print(f"BLIP image feats batch {done}/{total} in {batch_time:.3f}s")
+    image_feats = torch.cat(image_feats, dim=0)
+
+    reranked = []
+    total_caps = len(captions)
+    for i in range(total_caps):
+        batch_start = time.time()
+        cand = t2i_rank[i]
+        img_feat = image_feats[cand].to(device)
+        encoder_att = torch.ones(
+            img_feat.size()[:-1], dtype=torch.long).to(device)
+        text_input = blip_model.tokenizer(
+            [captions[i]] * len(cand),
+            padding="longest",
+            truncation=True,
+            max_length=35,
+            return_tensors="pt",
+        ).to(device)
+        encoder_input_ids = text_input.input_ids.clone()
+        encoder_input_ids[:, 0] = blip_model.tokenizer.enc_token_id
+        with torch.no_grad(), amp_ctx:
+            output = blip_model.text_encoder(
+                encoder_input_ids,
+                attention_mask=text_input.attention_mask,
+                encoder_hidden_states=img_feat,
+                encoder_attention_mask=encoder_att,
+                return_dict=True,
+            )
+            scores = blip_model.itm_head(
+                output.last_hidden_state[:, 0, :])[:, 1]
+        order = torch.argsort(scores, descending=True)
+        reranked.append([cand[j] for j in order.tolist()])
+        batch_time = time.time() - batch_start
+        print(f"BLIP rerank batch {i + 1}/{total_caps} in {batch_time:.3f}s")
+    return reranked
+
+
 def main():
     device = "cuda" if torch.cuda.is_available(
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
@@ -184,14 +242,14 @@ def main():
     i2t_rank = topk_faiss(image_feats, text_feats, RETRIEVE_K).tolist()
     t2i_rank = topk_faiss(text_feats, image_feats, RETRIEVE_K).tolist()
 
-    albef_cfg = OmegaConf.load(ALBEF_CFG_PATH)
-    albef_model = AlbefRetrieval.from_config(albef_cfg.model)
-    albef_model.eval()
-    albef_model = albef_model.to(device)
-    albef_vis, _ = load_preprocess(albef_cfg.preprocess)
+    blip_cfg = OmegaConf.load(BLIP_ITM_CFG_PATH)
+    blip_model = BlipITM.from_config(blip_cfg.model)
+    blip_model.eval()
+    blip_model = blip_model.to(device)
+    blip_vis, _ = load_preprocess(blip_cfg.preprocess)
 
-    t2i_rank = rerank_t2i_with_albef(
-        albef_model, albef_vis["eval"], captions, images, t2i_rank, ALBEF_IMAGE_BATCH, device
+    t2i_rank = blip_rerank(
+        blip_model, blip_vis["eval"], captions, images, t2i_rank, BLIP_ITM_IMAGE_BATCH, device
     )
 
     i2t = {
