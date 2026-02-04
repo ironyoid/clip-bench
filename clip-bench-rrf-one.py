@@ -5,37 +5,48 @@ import open_clip
 import torch
 from PIL import Image
 import json
+import os
 import time
 from tqdm import tqdm
 
-
 DATASET_PATH = "dataset/coco2014"
-ANN_PATH = f"{DATASET_PATH}/annotations/karpathy_test.json"
+PARAPHRASE_PATH = f"{DATASET_PATH}/annotations/karpathy_paraphrases.json"
 MODEL_NAME = "ViT-L-14"
 PRETRAINED = "openai"
 IMAGE_BATCH = 64
 TEXT_BATCH = 256
 RETRIEVE_K = 100
+RRF_K = 20
 
 
-def load_karpathy_test(ann_path, coco_root):
-    data = json.load(open(ann_path, "r", encoding="utf-8"))
+def load_karpathy_paraphrases(path):
+    data = json.load(open(path, "r", encoding="utf-8"))
     images = []
     image_ids = []
     captions = []
     caption_ids = []
+    variants = []
 
-    for img in data.get("images", []):
-        if img.get("split") != "test":
+    for img in data:
+        sents = img.get("captions", [])
+        if not sents:
             continue
-        img_path = f"{coco_root}/{img['filepath']}/{img['filename']}"
-        images.append(img_path)
-        image_ids.append(img["cocoid"])
-        for sent in img.get("sentences", []):
-            captions.append(sent["raw"].strip())
-            caption_ids.append(sent["sentid"])
+        images.append(img["image"])
+        image_ids.append(img["image_id"])
+        sent = sents[0]
+        caption = sent["caption"].strip()
+        captions.append(caption)
+        caption_ids.append(sent["caption_id"])
+        seen = set()
+        uniq = []
+        for t in [caption] + sent["paraphrases"]:
+            t = t.strip()
+            if t and t not in seen:
+                seen.add(t)
+                uniq.append(t)
+        variants.append(uniq)
 
-    return images, image_ids, captions, caption_ids
+    return images, image_ids, captions, caption_ids, variants
 
 
 def encode_images(model, preprocess, image_paths, batch_size, device):
@@ -66,16 +77,29 @@ def encode_texts(model, tokenizer, texts, batch_size, device):
     return feats / feats.norm(dim=1, keepdim=True)
 
 
-def topk_faiss(text_feats, img_feats, k):
-    txf = text_feats.detach().cpu().numpy().astype("float32", copy=False)
+def build_faiss_index(img_feats):
     imf = img_feats.detach().cpu().numpy().astype("float32", copy=False)
-    txf = np.ascontiguousarray(txf)
     imf = np.ascontiguousarray(imf)
-    k = min(k, imf.shape[0])
     index = faiss.IndexFlatIP(imf.shape[1])
     index.add(imf)
+    return index
+
+
+def topk_faiss(index, text_feats, k):
+    txf = text_feats.detach().cpu().numpy().astype("float32", copy=False)
+    txf = np.ascontiguousarray(txf)
+    k = min(k, index.ntotal)
     _, indices = index.search(txf, k)
     return indices
+
+
+def rrf_fuse(rank_lists, k, topk):
+    scores = {}
+    for ranks in rank_lists:
+        for r, idx in enumerate(ranks):
+            scores[idx] = scores.get(idx, 0.0) + 1.0 / (k + r + 1)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    return [idx for idx, _ in ranked[:topk]]
 
 
 def main():
@@ -83,8 +107,8 @@ def main():
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    images, image_ids, captions, caption_ids = load_karpathy_test(
-        ANN_PATH, DATASET_PATH)
+    images, image_ids, captions, caption_ids, variants = load_karpathy_paraphrases(
+        PARAPHRASE_PATH)
     print(f"Test images: {len(images)}")
     print(f"Test captions: {len(captions)}")
 
@@ -97,12 +121,33 @@ def main():
     image_feats = encode_images(
         model, preprocess, images, IMAGE_BATCH, device).cpu()
 
-    text_feats = encode_texts(
-        model, tokenizer, captions, TEXT_BATCH, device).cpu()
+    all_texts = []
+    offsets = []
+    caption_indices = []
+    for v in variants:
+        offsets.append(len(all_texts))
+        caption_indices.append(len(all_texts))
+        all_texts.extend(v)
+    variant_feats = encode_texts(
+        model, tokenizer, all_texts, TEXT_BATCH, device).cpu()
+    caption_feats = variant_feats[caption_indices]
     print(f"Encoded in {time.time() - t0:.1f}s")
 
-    i2t_rank = topk_faiss(image_feats, text_feats, RETRIEVE_K).tolist()
-    t2i_rank = topk_faiss(text_feats, image_feats, RETRIEVE_K).tolist()
+    image_index = build_faiss_index(image_feats)
+    text_index = build_faiss_index(caption_feats)
+
+    i2t_rank = topk_faiss(text_index, image_feats, RETRIEVE_K).tolist()
+
+    t2i_rank = []
+    for i, v in enumerate(variants):
+        start = offsets[i]
+        end = start + len(v)
+        ranks = topk_faiss(
+            image_index, variant_feats[start:end], RETRIEVE_K).tolist()
+        fused = rrf_fuse(ranks, RRF_K, RETRIEVE_K)
+        t2i_rank.append(fused)
+        if i % 1000 == 0:
+            print(f"Fused {i}/{len(variants)} captions")
 
     i2t = {
         image_ids[i]: [caption_ids[j] for j in i2t_rank[i]]
@@ -114,6 +159,23 @@ def main():
     }
 
     metric = eccv_caption.Metrics()
+    keep_image_ids = set(image_ids)
+    keep_caption_ids = set(caption_ids)
+
+    def filter_gts(gts):
+        return {
+            "i2t": {
+                iid: [cid for cid in cids if cid in keep_caption_ids]
+                for iid, cids in gts["i2t"].items() if iid in keep_image_ids
+            },
+            "t2i": {
+                cid: [iid for iid in iids if iid in keep_image_ids]
+                for cid, iids in gts["t2i"].items() if cid in keep_caption_ids
+            },
+        }
+
+    metric.coco_gts = filter_gts(metric.coco_gts)
+    metric.eccv_gts = filter_gts(metric.eccv_gts)
     scores = metric.compute_all_metrics(
         i2t_retrieved_items=i2t,
         t2i_retrieved_items=t2i,

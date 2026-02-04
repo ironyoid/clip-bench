@@ -28,12 +28,15 @@ def load_karpathy_test(ann_path, coco_root):
     for img in data.get("images", []):
         if img.get("split") != "test":
             continue
+        sents = img.get("sentences", [])
+        if not sents:
+            continue
         img_path = f"{coco_root}/{img['filepath']}/{img['filename']}"
         images.append(img_path)
         image_ids.append(img["cocoid"])
-        for sent in img.get("sentences", []):
-            captions.append(sent["raw"].strip())
-            caption_ids.append(sent["sentid"])
+        sent = sents[0]
+        captions.append(sent["raw"].strip())
+        caption_ids.append(sent["sentid"])
 
     return images, image_ids, captions, caption_ids
 
@@ -114,6 +117,23 @@ def main():
     }
 
     metric = eccv_caption.Metrics()
+    keep_image_ids = set(image_ids)
+    keep_caption_ids = set(caption_ids)
+
+    def filter_gts(gts):
+        return {
+            "i2t": {
+                iid: [cid for cid in cids if cid in keep_caption_ids]
+                for iid, cids in gts["i2t"].items() if iid in keep_image_ids
+            },
+            "t2i": {
+                cid: [iid for iid in iids if iid in keep_image_ids]
+                for cid, iids in gts["t2i"].items() if cid in keep_caption_ids
+            },
+        }
+
+    metric.coco_gts = filter_gts(metric.coco_gts)
+    metric.eccv_gts = filter_gts(metric.eccv_gts)
     scores = metric.compute_all_metrics(
         i2t_retrieved_items=i2t,
         t2i_retrieved_items=t2i,

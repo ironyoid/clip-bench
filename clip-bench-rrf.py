@@ -1,20 +1,22 @@
 import numpy as np
 import faiss
 import eccv_caption
-import clip
+import open_clip
 import torch
 from PIL import Image
 import json
 import os
 import time
+from tqdm import tqdm
 
 DATASET_PATH = "dataset/coco2014"
-PARAPHRASE_PATH = f"{DATASET_PATH}/annotations/karpathy_paraphrases_hot.json"
-MODEL_NAME = "ViT-B/32"
+PARAPHRASE_PATH = f"{DATASET_PATH}/annotations/karpathy_paraphrases.json"
+MODEL_NAME = "ViT-L-14"
+PRETRAINED = "openai"
 IMAGE_BATCH = 64
 TEXT_BATCH = 256
-RETRIEVE_K = 200
-RRF_K = 20
+RETRIEVE_K = 1000
+RRF_K = 60
 
 
 def load_karpathy_paraphrases(path):
@@ -47,7 +49,7 @@ def load_karpathy_paraphrases(path):
 def encode_images(model, preprocess, image_paths, batch_size, device):
     feats = []
     total = len(image_paths)
-    for i in range(0, total, batch_size):
+    for i in tqdm(range(0, total, batch_size), desc="Encoded images"):
         batch_paths = image_paths[i:i + batch_size]
         images = [preprocess(Image.open(p).convert("RGB"))
                   for p in batch_paths]
@@ -55,25 +57,19 @@ def encode_images(model, preprocess, image_paths, batch_size, device):
         with torch.no_grad():
             batch_feats = model.encode_image(image_input)
         feats.append(batch_feats)
-        if (i // batch_size) % 10 == 0:
-            done = min(i + batch_size, total)
-            print(f"Encoded images: {done}/{total}")
     feats = torch.cat(feats, dim=0)
     return feats / feats.norm(dim=1, keepdim=True)
 
 
-def encode_texts(model, texts, batch_size, device):
+def encode_texts(model, tokenizer, texts, batch_size, device):
     feats = []
     total = len(texts)
-    for i in range(0, total, batch_size):
+    for i in tqdm(range(0, total, batch_size), desc="Encoded captions"):
         batch = texts[i:i + batch_size]
-        tokens = clip.tokenize(batch).to(device)
+        tokens = tokenizer(batch).to(device)
         with torch.no_grad():
             batch_feats = model.encode_text(tokens)
         feats.append(batch_feats)
-        if (i // batch_size) % 10 == 0:
-            done = min(i + batch_size, total)
-            print(f"Encoded captions: {done}/{total}")
     feats = torch.cat(feats, dim=0)
     return feats / feats.norm(dim=1, keepdim=True)
 
@@ -113,8 +109,10 @@ def main():
     print(f"Test images: {len(images)}")
     print(f"Test captions: {len(captions)}")
 
-    model, preprocess = clip.load(MODEL_NAME, device=device)
+    model, _, preprocess = open_clip.create_model_and_transforms(
+        MODEL_NAME, pretrained=PRETRAINED, device=device)
     model.eval()
+    tokenizer = open_clip.get_tokenizer(MODEL_NAME)
 
     t0 = time.time()
     image_feats = encode_images(
@@ -127,7 +125,8 @@ def main():
         offsets.append(len(all_texts))
         caption_indices.append(len(all_texts))
         all_texts.extend(v)
-    variant_feats = encode_texts(model, all_texts, TEXT_BATCH, device).cpu()
+    variant_feats = encode_texts(
+        model, tokenizer, all_texts, TEXT_BATCH, device).cpu()
     caption_feats = variant_feats[caption_indices]
     print(f"Encoded in {time.time() - t0:.1f}s")
 
