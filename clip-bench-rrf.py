@@ -9,7 +9,7 @@ import os
 import time
 
 DATASET_PATH = "dataset/coco2014"
-PARAPHRASE_PATH = f"{DATASET_PATH}/annotations/karpathy_paraphrases.json"
+PARAPHRASE_PATH = f"{DATASET_PATH}/annotations/karpathy_paraphrases_hot.json"
 MODEL_NAME = "ViT-B/32"
 IMAGE_BATCH = 64
 TEXT_BATCH = 256
@@ -160,10 +160,15 @@ def main():
     scores = metric.compute_all_metrics(
         i2t_retrieved_items=i2t,
         t2i_retrieved_items=t2i,
-        target_metrics=["eccv_map_at_r", "eccv_rprecision", "eccv_r1"],
-        Ks=[1],
+        target_metrics=["coco_5k_recalls",
+                        "eccv_map_at_r", "eccv_rprecision", "eccv_r1"],
+        Ks=[1, 5, 10],
         verbose=True,
     )
+    print("COCO 5K T2I recalls:")
+    print(f"R@1: {scores['coco_5k_r1']['t2i']:.2f}")
+    print(f"R@5: {scores['coco_5k_r5']['t2i']:.2f}")
+    print(f"R@10: {scores['coco_5k_r10']['t2i']:.2f}")
     print("ECCV T2I metrics:")
     print(f"Map@R: {scores['eccv_map_at_r']['t2i']:.2f}")
     print(f"R-P: {scores['eccv_rprecision']['t2i']:.2f}")

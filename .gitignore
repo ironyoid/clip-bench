@@ -6,3 +6,4 @@ dataset-backup
 __pycache__
 *.pdf
 LAVIS
+reqs
