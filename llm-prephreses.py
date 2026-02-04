@@ -5,13 +5,13 @@ from tqdm import tqdm
 
 ANN_PATH = "dataset/coco2014/annotations/karpathy_test.json"
 COCO_ROOT = "dataset/coco2014"
-OUTPUT_PATH = "dataset/coco2014/annotations/karpathy_paraphrases_hot.json"
+OUTPUT_PATH = "dataset/coco2014/annotations/karpathy_paraphrases_too_hot.json"
 # MODEL = "gemma3:12b"
-# MODEL = "gemma3:4b"
-MODEL = "phi3:mini"
+MODEL = "gemma3:4b"
+# MODEL = "phi3:mini"
 
 N = 4
-TEMPERATURE = 0.7
+TEMPERATURE = 2
 
 SYSTEM_PROMPT = """You are a helpful caption paraphraser for image retrieval.
 
@@ -20,8 +20,10 @@ Rules:
 - Preserve numbers, colors, attributes, and relations.
 - Do not mention \"caption\" or \"paraphrase\" or add commentary.
 - Output must be valid JSON only.
+- You can use synonyms.
 - Use natural, varied wording and structure.
-- Each under 20 words
+- Each under 25 words.
+- You are not allowed to produce less than 4 paraphrases.
 
 Return exactly N paraphrases as:
 {"paraphrases":["...","..."]}
