@@ -8,6 +8,13 @@ import numpy as np
 import cv2
 from PIL import Image
 from tqdm import tqdm
+import torch
+import open_clip
+import faiss
+
+from omegaconf import OmegaConf
+from lavis.models import load_preprocess
+from lavis.models.albef_models.albef_retrieval import AlbefRetrieval
 
 
 DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
@@ -89,8 +96,6 @@ def load_karpathy_test(ann_path, coco_root):
 
 
 def encode_images(model, preprocess, image_paths, batch_size, device):
-    import torch
-
     feats = []
     total = len(image_paths)
     for i in tqdm(range(0, total, batch_size), desc="Encoded images"):
@@ -106,8 +111,6 @@ def encode_images(model, preprocess, image_paths, batch_size, device):
 
 
 def encode_texts(model, tokenizer, texts, batch_size, device):
-    import torch
-
     feats = []
     total = len(texts)
     for i in tqdm(range(0, total, batch_size), desc="Encoded captions"):
@@ -121,8 +124,6 @@ def encode_texts(model, tokenizer, texts, batch_size, device):
 
 
 def topk_faiss(query_feats, target_feats, k):
-    import faiss
-
     qf = query_feats.detach().cpu().numpy().astype("float32", copy=False)
     tf = target_feats.detach().cpu().numpy().astype("float32", copy=False)
     qf = np.ascontiguousarray(qf)
@@ -134,129 +135,7 @@ def topk_faiss(query_feats, target_feats, k):
     return indices
 
 
-def wrap_text(text, max_chars=80):
-    words = text.split()
-    lines = []
-    cur = ""
-    for word in words:
-        trial = f"{cur} {word}".strip()
-        if len(trial) <= max_chars:
-            cur = trial
-        else:
-            if cur:
-                lines.append(cur)
-            cur = word
-    if cur:
-        lines.append(cur)
-    return lines
-
-
-def visualize_clip_top10(captions, caption_ids, image_paths, image_ids, t2i_rank_clip, t2i_rank_albef, topk=10):
-    rows = 2
-    cols = 5
-    tile_h = 220
-    tile_w = 220
-    pad = 10
-    header_h = 190
-    panel_w = cols * tile_w + (cols + 1) * pad
-    panel_h = header_h + rows * tile_h + (rows + 1) * pad
-    win_clip = "CLIP Top-10"
-    win_albef = "ALBEF Top-10"
-
-    def build_panel(title, caption, query_obj_id, ranked_indices):
-        panel = np.zeros((panel_h, panel_w, 3), dtype=np.uint8)
-        caption_lines = wrap_text(caption, max_chars=85)[:2]
-        header_lines = [
-            title,
-            f"query object_id: {query_obj_id}",
-            f"caption: {caption_lines[0] if caption_lines else ''}",
-            f"{caption_lines[1] if len(caption_lines) > 1 else ''}",
-            "key: any next | q/esc quit",
-        ]
-
-        y = 28
-        for line in header_lines:
-            if line:
-                cv2.putText(
-                    panel,
-                    line,
-                    (10, y),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    0.65,
-                    (0, 255, 0),
-                    2,
-                    cv2.LINE_AA,
-                )
-            y += 28
-
-        cv2.putText(
-            panel,
-            "2x5 top-10",
-            (10, header_h - 18),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (255, 255, 255),
-            2,
-            cv2.LINE_AA,
-        )
-        top_indices = ranked_indices[:topk]
-        for rank, img_idx in enumerate(top_indices):
-            r = rank // cols
-            c = rank % cols
-            x = pad + c * (tile_w + pad)
-            y = header_h + pad + r * (tile_h + pad)
-
-            img = cv2.imread(image_paths[img_idx])
-            if img is None:
-                tile = np.zeros((tile_h, tile_w, 3), dtype=np.uint8)
-            else:
-                tile = cv2.resize(img, (tile_w, tile_h),
-                                  interpolation=cv2.INTER_AREA)
-            panel[y:y + tile_h, x:x + tile_w] = tile
-
-            pred_obj_id = image_ids[img_idx]
-            is_hit = pred_obj_id == query_obj_id
-            border_color = (0, 255, 0) if is_hit else (200, 200, 200)
-            cv2.rectangle(panel, (x, y), (x + tile_w - 1,
-                                          y + tile_h - 1), border_color, 2)
-            cv2.putText(
-                panel,
-                f"#{rank + 1} obj:{pred_obj_id}",
-                (x + 6, y + 22),
-                cv2.FONT_HERSHEY_SIMPLEX,
-                0.55,
-                border_color,
-                2,
-                cv2.LINE_AA,
-            )
-        return panel
-
-    for i, caption in enumerate(captions):
-        clip_panel = build_panel(
-            f"CLIP Top-10 | query {i + 1}/{len(captions)}",
-            caption,
-            caption_ids[i],
-            t2i_rank_clip[i],
-        )
-        albef_panel = build_panel(
-            f"ALBEF Top-10 | query {i + 1}/{len(captions)}",
-            caption,
-            caption_ids[i],
-            t2i_rank_albef[i],
-        )
-
-        cv2.imshow(win_clip, clip_panel)
-        cv2.imshow(win_albef, albef_panel)
-        key = cv2.waitKey(0) & 0xFF
-        if key in (27, ord("q")):
-            break
-
-    cv2.destroyAllWindows()
-
-
 def albef_rerank(albef_model, albef_preprocess, captions, image_paths, t2i_rank, batch_size, device):
-    import torch
-
     image_feats = []
     image_embeds = []
     total = len(image_paths)
@@ -343,10 +222,56 @@ def compute_recalls(ranked_indices, query_object_ids, target_object_ids, ks=(1, 
     return {k: hits[k] / total for k in ks}
 
 
-def main():
-    import torch
-    import open_clip
+def make_grid(image_paths, highlight_flags, tile_size=160, cols=5):
+    rows = 2
+    grid = np.zeros((rows * tile_size, cols * tile_size, 3), dtype=np.uint8)
+    for i, path in enumerate(image_paths[:rows * cols]):
+        img = Image.open(path).convert("RGB")
+        img = img.resize((tile_size, tile_size), Image.BICUBIC)
+        img = np.asarray(img)[:, :, ::-1].copy()
+        y = (i // cols) * tile_size
+        x = (i % cols) * tile_size
+        grid[y:y + tile_size, x:x + tile_size] = img
+        if highlight_flags and highlight_flags[i]:
+            cv2.rectangle(
+                grid,
+                (x, y),
+                (x + tile_size - 1, y + tile_size - 1),
+                (0, 255, 0),
+                3,
+            )
+    return grid
 
+
+def visualize_results(captions, images, t2i_rank, t2i_rank_albef, tile_size=160):
+    window_name = "retrieval"
+    total = len(captions)
+    for i, caption in enumerate(captions):
+        clip_top = t2i_rank[i][:10]
+        albef_top = t2i_rank_albef[i][:10]
+        matched = set(clip_top) & set(albef_top)
+        print(f"\n[{i + 1}/{total}] {caption}")
+
+        clip_paths = [images[j] for j in clip_top]
+        albef_paths = [images[j] for j in albef_top]
+        clip_highlight = [j in matched for j in clip_top]
+        albef_highlight = [j in matched for j in albef_top]
+
+        left = make_grid(clip_paths, clip_highlight, tile_size=tile_size)
+        right = make_grid(albef_paths, albef_highlight, tile_size=tile_size)
+        gap = 10
+        canvas = np.zeros(
+            (left.shape[0], left.shape[1] + right.shape[1] + gap, 3),
+            dtype=np.uint8,
+        )
+        canvas[:, :left.shape[1]] = left
+        canvas[:, left.shape[1] + gap:] = right
+        cv2.imshow(window_name, canvas)
+        cv2.waitKey(0)
+    cv2.destroyAllWindows()
+
+
+def main():
     device = "cuda" if torch.cuda.is_available(
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
@@ -376,10 +301,6 @@ def main():
     for k in METRIC_KS:
         print(f"R@{k}: {t2i_clip[k]:.2f}")
 
-    from omegaconf import OmegaConf
-    from lavis.models import load_preprocess
-    from lavis.models.albef_models.albef_retrieval import AlbefRetrieval
-
     albef_cfg = OmegaConf.load(ALBEF_CFG_PATH)
     albef_model = AlbefRetrieval.from_config(albef_cfg.model)
     albef_model.eval()
@@ -396,14 +317,7 @@ def main():
     for k in METRIC_KS:
         print(f"R@{k}: {t2i_albef[k]:.2f}")
 
-    del image_feats, text_feats, albef_model
-    gc.collect()
-    if torch.cuda.is_available():
-        torch.cuda.empty_cache()
-
-    visualize_clip_top10(
-        captions, caption_ids, images, image_ids, t2i_rank, t2i_rank_albef, topk=10
-    )
+    visualize_results(captions, images, t2i_rank, t2i_rank_albef)
 
 
 if __name__ == "__main__":
