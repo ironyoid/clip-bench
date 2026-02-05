@@ -13,9 +13,7 @@ import open_clip
 import faiss
 
 from ranx import Qrels, Run, evaluate
-from omegaconf import OmegaConf
-from lavis.models import load_preprocess
-from lavis.models.albef_models.albef_retrieval import AlbefRetrieval
+from lavis.models import load_model_and_preprocess
 
 
 DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
@@ -26,8 +24,7 @@ IMAGE_BATCH = 64
 TEXT_BATCH = 256
 RETRIEVE_K = 10
 METRIC_KS = (1, 5, 10)
-ALBEF_IMAGE_BATCH = 64
-ALBEF_CFG_PATH = "configs/albef_retrieval_base.yaml"
+BLIP2_IMAGE_BATCH = 2
 R_METRIC = "recall"
 
 
@@ -45,7 +42,7 @@ def decode_uncompressed_rle(rle):
     return flat.reshape((h, w), order="F")
 
 
-def load_karpathy_test(ann_path, coco_root):
+def load_robo_dataset(ann_path, coco_root):
     data = json.load(open(ann_path, "r", encoding="utf-8"))
     object_caption_path = os.path.join(coco_root, "objects_caption.json")
     masked_objects_dir = os.path.join(coco_root, "masked_objects")
@@ -93,7 +90,6 @@ def load_karpathy_test(ann_path, coco_root):
         captions.append(
             object_captions[str(object_id)]["object_caption"].strip())
         caption_ids.append(object_id)
-
     return images, image_ids, captions, caption_ids
 
 
@@ -139,57 +135,42 @@ def topk_faiss(query_feats, target_feats, k, return_scores=False):
     return indices
 
 
-def albef_rerank(albef_model, albef_preprocess, captions, image_paths, t2i_rank, batch_size, device):
-    image_feats = []
+def blip2_rerank(blip2_model, blip2_vis, blip2_txt, captions, image_paths, t2i_rank, batch_size, device):
+    processed_images = []
     total = len(image_paths)
     batch_start = time.time()
-    for i in tqdm(range(0, total, batch_size), desc="ALBEF image feats"):
-        batch_paths = image_paths[i:i + batch_size]
-        images = [albef_preprocess(Image.open(p).convert("RGB"))
-                  for p in batch_paths]
-        image_input = torch.stack(images).to(device)
-        with torch.no_grad():
-            batch_feats = albef_model.visual_encoder.forward_features(
-                image_input)
-        image_feats.append(batch_feats.cpu())
-    image_feats = torch.cat(image_feats, dim=0)
+    for i in tqdm(range(total), desc="BLIP2 preprocess"):
+        image = blip2_vis(Image.open(image_paths[i]).convert("RGB"))
+        processed_images.append(image)
     batch_time = time.time() - batch_start
-
-    print(f"ALBEF image feats: {total} in {batch_time:.3f}s")
+    print(f"BLIP2 preprocess: {total} in {batch_time:.3f}s")
 
     reranked = []
     reranked_scores = []
     total_caps = len(captions)
     batch_start = time.time()
-    for i in tqdm(range(total_caps), desc="ALBEF rerank"):
+    for i in tqdm(range(total_caps), desc="BLIP2 rerank"):
         cand = t2i_rank[i]
-        img_feat = image_feats[cand].to(device)
-        encoder_att = torch.ones(
-            img_feat.size()[:-1], dtype=torch.long).to(device)
-        text_input = albef_model.tokenizer(
-            [captions[i]] * len(cand),
-            padding="max_length",
-            truncation=True,
-            max_length=35,
-            return_tensors="pt",
-        ).to(device)
-        with torch.no_grad():
-            output = albef_model.text_encoder(
-                text_input.input_ids,
-                attention_mask=text_input.attention_mask,
-                encoder_hidden_states=img_feat,
-                encoder_attention_mask=encoder_att,
-                return_dict=True,
-            )
-            scores = albef_model.itm_head(
-                output.last_hidden_state[:, 0, :])[:, 1]
+        text_input = blip2_txt(captions[i])
+        scores = []
+        for j in range(0, len(cand), batch_size):
+            chunk = cand[j:j + batch_size]
+            images = torch.stack([processed_images[k]
+                                 for k in chunk]).to(device)
+            text_batch = [text_input] * len(chunk)
+            with torch.no_grad():
+                logits = blip2_model(
+                    {"image": images, "text_input": text_batch}, match_head="itm"
+                )
+            scores.append(logits[:, 1].float().cpu())
+        scores = torch.cat(scores, dim=0)
         order = torch.argsort(scores, descending=True)
         order_list = order.tolist()
-        reranked.append([cand[j] for j in order_list])
+        reranked.append([cand[idx] for idx in order_list])
         reranked_scores.append(scores[order].tolist())
 
     batch_time = time.time() - batch_start
-    print(f"ALBEF rerank: {total_caps} in {batch_time:.3f}s")
+    print(f"BLIP2 rerank: {total_caps} in {batch_time:.3f}s")
     return reranked, reranked_scores
 
 
@@ -230,7 +211,7 @@ def evaluate_metrics(caption_ids, image_ids, ranked_indices, ranked_scores, ks, 
     metrics = []
     for k in ks:
         metrics.extend([f"{r_metric}@{k}", f"precision@{k}", f"ndcg@{k}"])
-    metrics.append(f"map@{max(ks)}")
+    metrics.append("map@10")
     return evaluate(qrels, run, metrics)
 
 
@@ -272,7 +253,7 @@ def wrap_text(text, max_width, font, font_scale, thickness):
     return lines
 
 
-def visualize_results(captions, images, caption_ids, image_ids, t2i_rank, t2i_rank_albef, tile_size=160):
+def visualize_results(captions, images, caption_ids, image_ids, t2i_rank, t2i_rank_blip2, tile_size=160):
     window_name = "retrieval"
     total = len(captions)
     cols = 5
@@ -286,19 +267,19 @@ def visualize_results(captions, images, caption_ids, image_ids, t2i_rank, t2i_ra
     text_color = (240, 240, 240)
     for i, caption in enumerate(captions):
         clip_top = t2i_rank[i][:10]
-        albef_top = t2i_rank_albef[i][:10]
+        blip2_top = t2i_rank_blip2[i][:10]
 
         clip_paths = [images[j] for j in clip_top]
-        albef_paths = [images[j] for j in albef_top]
+        blip2_paths = [images[j] for j in blip2_top]
         caption_obj_id = caption_ids[i]
         clip_highlight = [image_ids[j] == caption_obj_id for j in clip_top]
-        albef_highlight = [image_ids[j] == caption_obj_id for j in albef_top]
+        blip2_highlight = [image_ids[j] == caption_obj_id for j in blip2_top]
 
         left = make_grid(
             clip_paths, clip_highlight, tile_size=tile_size, cols=cols, rows=rows
         )
         right = make_grid(
-            albef_paths, albef_highlight, tile_size=tile_size, cols=cols, rows=rows
+            blip2_paths, blip2_highlight, tile_size=tile_size, cols=cols, rows=rows
         )
         grid_h = left.shape[0]
         grid_w = left.shape[1] + right.shape[1] + gap
@@ -341,7 +322,7 @@ def main():
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    images, image_ids, captions, caption_ids = load_karpathy_test(
+    images, image_ids, captions, caption_ids = load_robo_dataset(
         ANN_PATH, DATASET_PATH)
     print(f"Images: {len(images)}")
     print(f"Captions: {len(captions)}")
@@ -374,31 +355,41 @@ def main():
         p = clip_metrics[f"precision@{k}"]
         n = clip_metrics[f"ndcg@{k}"]
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
-    print(f"MAP@{max(METRIC_KS)}: {clip_metrics[f'map@{max(METRIC_KS)}']:.2f}")
+    print(
+        f"MAP@{max(METRIC_KS)}: {clip_metrics[f'map@{max(METRIC_KS)}']:.2f}")
 
-    albef_cfg = OmegaConf.load(ALBEF_CFG_PATH)
-    albef_model = AlbefRetrieval.from_config(albef_cfg.model)
-    albef_model.eval()
-    albef_model = albef_model.to(device)
-    albef_vis, _ = load_preprocess(albef_cfg.preprocess)
+    blip2_model, blip2_vis, blip2_txt = load_model_and_preprocess(
+        name="blip2_image_text_matching",
+        model_type="pretrain",
+        is_eval=True,
+        device=device,
+    )
+    blip2_model.eval()
 
-    t2i_rank_albef, t2i_scores_albef = albef_rerank(
-        albef_model, albef_vis["eval"], captions, images, t2i_rank, ALBEF_IMAGE_BATCH, device
+    t2i_rank_blip2, t2i_scores_blip2 = blip2_rerank(
+        blip2_model,
+        blip2_vis["eval"],
+        blip2_txt["eval"],
+        captions,
+        images,
+        t2i_rank,
+        BLIP2_IMAGE_BATCH,
+        device,
     )
-    albef_metrics = evaluate_metrics(
-        caption_ids, image_ids, t2i_rank_albef, t2i_scores_albef, METRIC_KS, R_METRIC
+    blip2_metrics = evaluate_metrics(
+        caption_ids, image_ids, t2i_rank_blip2, t2i_scores_blip2, METRIC_KS, R_METRIC
     )
-    print("ALBEF-reranked Text-to-Image metrics (ranx):")
+    print("BLIP2-reranked Text-to-Image metrics (ranx):")
     for k in METRIC_KS:
-        r = albef_metrics[f"{R_METRIC}@{k}"]
-        p = albef_metrics[f"precision@{k}"]
-        n = albef_metrics[f"ndcg@{k}"]
+        r = blip2_metrics[f"{R_METRIC}@{k}"]
+        p = blip2_metrics[f"precision@{k}"]
+        n = blip2_metrics[f"ndcg@{k}"]
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
     print(
-        f"MAP@{max(METRIC_KS)}: {albef_metrics[f'map@{max(METRIC_KS)}']:.2f}")
+        f"MAP@{max(METRIC_KS)}: {blip2_metrics[f'map@{max(METRIC_KS)}']:.2f}")
 
     visualize_results(captions, images, caption_ids,
-                      image_ids, t2i_rank, t2i_rank_albef)
+                      image_ids, t2i_rank, t2i_rank_blip2)
 
 
 if __name__ == "__main__":
