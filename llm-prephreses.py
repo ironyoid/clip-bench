@@ -21,7 +21,7 @@ Rules:
 - Do not mention "caption" or "prephrase" or add commentary.
 - Output must be valid JSON only.
 - Use natural, varied wording.
-- Each prephrase should be under 10 words.
+- Each prephrase should be under 20 words.
 - You are not allowed to produce less than 4 prephrases.
 
 Return exactly N prephrases as:
