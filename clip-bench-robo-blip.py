@@ -18,14 +18,15 @@ from lavis.models import load_model_and_preprocess
 
 DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
 ANN_PATH = f"{DATASET_PATH}/annotations/ground_truth/robotics_kitchen.json"
+PREPHRASE_PATH = f"{DATASET_PATH}/objects_caption_prephrases.json"
 MODEL_NAME = "ViT-L-14"
 PRETRAINED = "openai"
 IMAGE_BATCH = 64
 TEXT_BATCH = 256
 RETRIEVE_K = 10
 METRIC_KS = (1, 5, 10)
+RRF_K = 60
 BLIP2_IMAGE_BATCH = 2
-R_METRIC = "recall"
 
 
 def decode_uncompressed_rle(rle):
@@ -42,18 +43,23 @@ def decode_uncompressed_rle(rle):
     return flat.reshape((h, w), order="F")
 
 
-def load_robo_dataset(ann_path, coco_root):
+def load_robo_dataset(ann_path, coco_root, prephrase_path=None):
     data = json.load(open(ann_path, "r", encoding="utf-8"))
     object_caption_path = os.path.join(coco_root, "objects_caption.json")
+    if prephrase_path and os.path.exists(prephrase_path):
+        object_captions = json.load(
+            open(prephrase_path, "r", encoding="utf-8"))
+    else:
+        object_captions = json.load(
+            open(object_caption_path, "r", encoding="utf-8"))
     masked_objects_dir = os.path.join(coco_root, "masked_objects")
-    object_captions = json.load(
-        open(object_caption_path, "r", encoding="utf-8"))
     os.makedirs(masked_objects_dir, exist_ok=True)
 
     images = []
     image_ids = []
     captions = []
     caption_ids = []
+    variants = []
 
     annotations = data["annotations"]
     for frame_id in sorted(annotations.keys(), key=lambda x: int(x)):
@@ -87,10 +93,24 @@ def load_robo_dataset(ann_path, coco_root):
 
     present_object_ids = sorted(set(image_ids))
     for object_id in present_object_ids:
-        captions.append(
-            object_captions[str(object_id)]["object_caption"].strip())
+        obj = object_captions[str(object_id)]
+        caption = obj["object_caption"].strip()
+        captions.append(caption)
         caption_ids.append(object_id)
-    return images, image_ids, captions, caption_ids
+        prephrases = obj.get("prephrases", [])
+        seen = set()
+        uniq = []
+
+        def add_variant(text):
+            text = text.strip()
+            if text and text not in seen:
+                seen.add(text)
+                uniq.append(text)
+        add_variant(caption)
+        for p in prephrases:
+            add_variant(f"{p} {caption}")
+        variants.append(uniq)
+    return images, image_ids, captions, caption_ids, variants
 
 
 def encode_images(model, preprocess, image_paths, batch_size, device):
@@ -121,14 +141,18 @@ def encode_texts(model, tokenizer, texts, batch_size, device):
     return feats / feats.norm(dim=1, keepdim=True)
 
 
-def topk_faiss(query_feats, target_feats, k, return_scores=False):
-    qf = query_feats.detach().cpu().numpy().astype("float32", copy=False)
-    tf = target_feats.detach().cpu().numpy().astype("float32", copy=False)
-    qf = np.ascontiguousarray(qf)
+def build_faiss_index(feats):
+    tf = feats.detach().cpu().numpy().astype("float32", copy=False)
     tf = np.ascontiguousarray(tf)
-    k = min(k, tf.shape[0])
     index = faiss.IndexFlatIP(tf.shape[1])
     index.add(tf)
+    return index
+
+
+def topk_faiss(index, query_feats, k, return_scores=False):
+    qf = query_feats.detach().cpu().numpy().astype("float32", copy=False)
+    qf = np.ascontiguousarray(qf)
+    k = min(k, index.ntotal)
     scores, indices = index.search(qf, k)
     if return_scores:
         return indices, scores
@@ -147,9 +171,11 @@ def blip2_rerank(blip2_model, blip2_vis, blip2_txt, captions, image_paths, t2i_r
 
     reranked = []
     reranked_scores = []
+    query_times = []
     total_caps = len(captions)
     batch_start = time.time()
     for i in tqdm(range(total_caps), desc="BLIP2 rerank"):
+        q_start = time.time()
         cand = t2i_rank[i]
         text_input = blip2_txt(captions[i])
         scores = []
@@ -168,10 +194,22 @@ def blip2_rerank(blip2_model, blip2_vis, blip2_txt, captions, image_paths, t2i_r
         order_list = order.tolist()
         reranked.append([cand[idx] for idx in order_list])
         reranked_scores.append(scores[order].tolist())
+        query_times.append(time.time() - q_start)
 
     batch_time = time.time() - batch_start
     print(f"BLIP2 rerank: {total_caps} in {batch_time:.3f}s")
-    return reranked, reranked_scores
+    avg_query_time = sum(query_times) / max(1, len(query_times))
+    return reranked, reranked_scores, avg_query_time
+
+
+def rrf_fuse(rank_lists, k, topk):
+    scores = {}
+    for ranks in rank_lists:
+        for r, idx in enumerate(ranks):
+            scores[idx] = scores.get(idx, 0.0) + 1.0 / (k + r + 1)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    ranked = ranked[:topk]
+    return [idx for idx, _ in ranked], [score for _, score in ranked]
 
 
 def build_qrels(caption_ids, image_ids):
@@ -205,12 +243,12 @@ def build_run(ranked_indices, ranked_scores=None):
     return run
 
 
-def evaluate_metrics(caption_ids, image_ids, ranked_indices, ranked_scores, ks, r_metric):
+def evaluate_metrics(caption_ids, image_ids, ranked_indices, ranked_scores, ks):
     qrels = Qrels(build_qrels(caption_ids, image_ids))
     run = Run(build_run(ranked_indices, ranked_scores))
     metrics = []
     for k in ks:
-        metrics.extend([f"{r_metric}@{k}", f"precision@{k}", f"ndcg@{k}"])
+        metrics.extend([f"recall@{k}", f"precision@{k}", f"ndcg@{k}"])
     metrics.append("map@10")
     return evaluate(qrels, run, metrics)
 
@@ -322,8 +360,8 @@ def main():
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    images, image_ids, captions, caption_ids = load_robo_dataset(
-        ANN_PATH, DATASET_PATH)
+    images, image_ids, captions, caption_ids, variants = load_robo_dataset(
+        ANN_PATH, DATASET_PATH, PREPHRASE_PATH)
     print(f"Images: {len(images)}")
     print(f"Captions: {len(captions)}")
 
@@ -336,22 +374,43 @@ def main():
     t0 = time.time()
     image_feats = encode_images(
         model, preprocess, images, IMAGE_BATCH, device).cpu()
-    text_feats = encode_texts(
-        model, tokenizer, captions, TEXT_BATCH, device).cpu()
+
+    all_texts = []
+    offsets = []
+    for v in variants:
+        offsets.append(len(all_texts))
+        all_texts.extend(v)
+    variant_feats = encode_texts(
+        model, tokenizer, all_texts, TEXT_BATCH, device).cpu()
     print(f"Encoded in {time.time() - t0:.1f}s")
 
-    t2i_rank_np, t2i_scores_np = topk_faiss(
-        text_feats, image_feats, RETRIEVE_K, return_scores=True
-    )
-    t2i_rank = t2i_rank_np.tolist()
-    t2i_scores = t2i_scores_np.tolist()
+    image_index = build_faiss_index(image_feats)
+
+    t2i_rank = []
+    t2i_scores = []
+    clip_query_times = []
+    for i, v in enumerate(variants):
+        q_start = time.time()
+        start = offsets[i]
+        end = start + len(v)
+        ranks = topk_faiss(
+            image_index, variant_feats[start:end], RETRIEVE_K
+        ).tolist()
+        fused, fused_scores = rrf_fuse(ranks, RRF_K, RETRIEVE_K)
+        t2i_rank.append(fused)
+        t2i_scores.append(fused_scores)
+        clip_query_times.append(time.time() - q_start)
+        if i % 1000 == 0:
+            print(f"Fused {i}/{len(variants)} captions")
+    avg_clip_query_time = sum(clip_query_times) / max(1, len(clip_query_times))
+    print(f"Avg CLIP query time: {avg_clip_query_time:.4f}s")
 
     clip_metrics = evaluate_metrics(
-        caption_ids, image_ids, t2i_rank, t2i_scores, METRIC_KS, R_METRIC
+        caption_ids, image_ids, t2i_rank, t2i_scores, METRIC_KS
     )
     print("CLIP Text-to-Image metrics (ranx):")
     for k in METRIC_KS:
-        r = clip_metrics[f"{R_METRIC}@{k}"]
+        r = clip_metrics[f"recall@{k}"]
         p = clip_metrics[f"precision@{k}"]
         n = clip_metrics[f"ndcg@{k}"]
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
@@ -366,7 +425,7 @@ def main():
     )
     blip2_model.eval()
 
-    t2i_rank_blip2, t2i_scores_blip2 = blip2_rerank(
+    t2i_rank_blip2, t2i_scores_blip2, avg_blip_query_time = blip2_rerank(
         blip2_model,
         blip2_vis["eval"],
         blip2_txt["eval"],
@@ -376,12 +435,13 @@ def main():
         BLIP2_IMAGE_BATCH,
         device,
     )
+    print(f"Avg BLIP2 query time: {avg_blip_query_time:.4f}s")
     blip2_metrics = evaluate_metrics(
-        caption_ids, image_ids, t2i_rank_blip2, t2i_scores_blip2, METRIC_KS, R_METRIC
+        caption_ids, image_ids, t2i_rank_blip2, t2i_scores_blip2, METRIC_KS
     )
     print("BLIP2-reranked Text-to-Image metrics (ranx):")
     for k in METRIC_KS:
-        r = blip2_metrics[f"{R_METRIC}@{k}"]
+        r = blip2_metrics[f"recall@{k}"]
         p = blip2_metrics[f"precision@{k}"]
         n = blip2_metrics[f"ndcg@{k}"]
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
