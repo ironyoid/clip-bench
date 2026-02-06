@@ -1,2 +1,0 @@
-openai-clip
-faiss-gpu
