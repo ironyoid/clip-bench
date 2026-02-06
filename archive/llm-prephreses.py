@@ -1,16 +1,17 @@
 import json
+import time
 import ollama
 from tqdm import tqdm
 
 INPUT_PATH = "../dataset/robotics_kitchen_dataset_v3/objects_caption.json"
 OUTPUT_PATH = "../dataset/robotics_kitchen_dataset_v3/objects_caption_prephrases.json"
 
-MODEL = "gemma3:12b"
-# MODEL = "gemma3:4b"
+# MODEL = "gemma3:12b"
+MODEL = "gemma3:4b"
 # MODEL = "phi3:mini"
 
-N = 4
-TEMPERATURE = 2
+N = 10
+TEMPERATURE = 1.1
 
 SYSTEM_PROMPT = """You are a helpful prephrase generator for image retrieval.
 
@@ -22,7 +23,6 @@ Rules:
 - Output must be valid JSON only.
 - Use natural, varied wording.
 - Each prephrase should be under 20 words.
-- You are not allowed to produce less than 4 prephrases.
 
 Return exactly N prephrases as:
 {"prephrases":["...","..."]}
@@ -32,9 +32,11 @@ with open(INPUT_PATH, "r", encoding="utf-8") as f:
     data = json.load(f)
 
 out = {}
+times = []
 for obj_id, obj in tqdm(list(data.items()), desc="Objects"):
     caption = obj.get("object_caption", "").strip()
     payload = None
+    t0 = time.time()
     for _ in range(3):
         response = ollama.chat(
             model=MODEL,
@@ -56,6 +58,7 @@ for obj_id, obj in tqdm(list(data.items()), desc="Objects"):
         raise ValueError(
             f"Model did not return valid JSON. object_id={obj_id} caption={caption}"
         )
+    times.append(time.time() - t0)
     out[obj_id] = {
         **obj,
         "prephrases": payload["prephrases"],
@@ -65,3 +68,5 @@ with open(OUTPUT_PATH, "w", encoding="utf-8") as f:
     json.dump(out, f, ensure_ascii=False, indent=2)
 
 print(f"Saved {len(out)} objects to {OUTPUT_PATH}")
+avg_time = sum(times) / max(1, len(times))
+print(f"Avg generation time: {avg_time:.2f}s")
