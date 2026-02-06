@@ -10,18 +10,18 @@ import open_clip
 import faiss
 
 from ranx import Qrels, Run, evaluate
-from transformers import AutoTokenizer
 from parsers import load_robo_dataset
-from gen_params import IMAGE_BATCH, TEXT_BATCH, RETRIEVE_K, METRIC_KS
+from gen_params import IMAGE_BATCH, TEXT_BATCH, RETRIEVE_K, METRIC_KS, RRF_K
 
 
 DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
 ANN_PATH = f"{DATASET_PATH}/annotations/ground_truth/robotics_kitchen.json"
+PREPHRASE_PATH = f"{DATASET_PATH}/objects_caption_prephrases.json"
 
-MODEL_NAME = "ViT-SO400M-14-SigLIP2-378"
-PRETRAINED = "webli"
+MODEL_NAME = "ViT-L-14"
+PRETRAINED = "openai"
 
-OUTPUT_PATH = "dataset/robotics_kitchen_dataset_v3/clip_output/siglip-output.json"
+OUTPUT_PATH = "dataset/robotics_kitchen_dataset_v3/clip_output/openclip-llm-output.json"
 
 
 def encode_images(model, preprocess, image_paths, batch_size, device):
@@ -39,47 +39,45 @@ def encode_images(model, preprocess, image_paths, batch_size, device):
     return feats / feats.norm(dim=1, keepdim=True)
 
 
-def get_hf_tokenizer(model_name):
-    cfg = open_clip.get_model_config(model_name)
-    text_cfg = cfg.get("text_cfg", {}) if cfg else {}
-    tok_name = text_cfg.get(
-        "hf_tokenizer_name") or text_cfg.get("hf_model_name")
-    tokenizer = AutoTokenizer.from_pretrained(tok_name, trust_remote_code=True)
-    return tokenizer, text_cfg.get("context_length")
-
-
-def encode_texts_hf(model, tokenizer, texts, batch_size, device, context_length):
+def encode_texts(model, tokenizer, texts, batch_size, device):
     feats = []
     total = len(texts)
     for i in tqdm(range(0, total, batch_size), desc="Encoded captions"):
         batch = texts[i:i + batch_size]
-        tokens = tokenizer(
-            batch,
-            return_tensors="pt",
-            padding="max_length",
-            truncation=True,
-            max_length=context_length,
-        )
-        input_ids = tokens["input_ids"].to(device)
+        tokens = tokenizer(batch).to(device)
         with torch.no_grad():
-            batch_feats = model.encode_text(input_ids)
+            batch_feats = model.encode_text(tokens)
         feats.append(batch_feats)
     feats = torch.cat(feats, dim=0)
     return feats / feats.norm(dim=1, keepdim=True)
 
 
-def topk_faiss(query_feats, target_feats, k, return_scores=False):
-    qf = query_feats.detach().cpu().numpy().astype("float32", copy=False)
-    tf = target_feats.detach().cpu().numpy().astype("float32", copy=False)
-    qf = np.ascontiguousarray(qf)
+def build_faiss_index(feats):
+    tf = feats.detach().cpu().numpy().astype("float32", copy=False)
     tf = np.ascontiguousarray(tf)
-    k = min(k, tf.shape[0])
     index = faiss.IndexFlatIP(tf.shape[1])
     index.add(tf)
+    return index
+
+
+def topk_faiss(index, query_feats, k, return_scores=False):
+    qf = query_feats.detach().cpu().numpy().astype("float32", copy=False)
+    qf = np.ascontiguousarray(qf)
+    k = min(k, index.ntotal)
     scores, indices = index.search(qf, k)
     if return_scores:
         return indices, scores
     return indices
+
+
+def rrf_fuse(rank_lists, k, topk):
+    scores = {}
+    for ranks in rank_lists:
+        for r, idx in enumerate(ranks):
+            scores[idx] = scores.get(idx, 0.0) + 1.0 / (k + r + 1)
+    ranked = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    ranked = ranked[:topk]
+    return [idx for idx, _ in ranked], [score for _, score in ranked]
 
 
 def build_qrels(caption_ids, image_ids):
@@ -128,8 +126,8 @@ def main():
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    images, image_ids, captions, caption_ids = load_robo_dataset(
-        ANN_PATH, DATASET_PATH)
+    images, image_ids, captions, caption_ids, variants = load_robo_dataset(
+        ANN_PATH, DATASET_PATH, PREPHRASE_PATH)
     print(f"Images: {len(images)}")
     print(f"Captions: {len(captions)}")
 
@@ -137,29 +135,46 @@ def main():
         MODEL_NAME, pretrained=PRETRAINED, device=device
     )
     model.eval()
-    tokenizer, ctx_len = get_hf_tokenizer(MODEL_NAME)
+    tokenizer = open_clip.get_tokenizer(MODEL_NAME)
 
     t0 = time.time()
     image_feats = encode_images(
         model, preprocess, images, IMAGE_BATCH, device).cpu()
-    text_feats = encode_texts_hf(
-        model, tokenizer, captions, TEXT_BATCH, device, ctx_len).cpu()
+
+    all_texts = []
+    offsets = []
+    for v in variants:
+        offsets.append(len(all_texts))
+        all_texts.extend(v)
+    variant_feats = encode_texts(
+        model, tokenizer, all_texts, TEXT_BATCH, device).cpu()
     print(f"Encoded in {time.time() - t0:.1f}s")
 
-    t_search = time.time()
-    t2i_rank_np, t2i_scores_np = topk_faiss(
-        text_feats, image_feats, RETRIEVE_K, return_scores=True
-    )
-    search_time = time.time() - t_search
-    avg_query_time = search_time / max(1, len(captions))
-    print(f"Avg query time: {avg_query_time:.4f}s")
-    t2i_rank = t2i_rank_np.tolist()
-    t2i_scores = t2i_scores_np.tolist()
+    image_index = build_faiss_index(image_feats)
+
+    t2i_rank = []
+    t2i_scores = []
+    clip_query_times = []
+    for i, v in enumerate(variants):
+        q_start = time.time()
+        start = offsets[i]
+        end = start + len(v)
+        ranks = topk_faiss(
+            image_index, variant_feats[start:end], RETRIEVE_K
+        ).tolist()
+        fused, fused_scores = rrf_fuse(ranks, RRF_K, RETRIEVE_K)
+        t2i_rank.append(fused)
+        t2i_scores.append(fused_scores)
+        clip_query_times.append(time.time() - q_start)
+        if i % 1000 == 0:
+            print(f"Fused {i}/{len(variants)} captions")
+    avg_query_time = sum(clip_query_times) / max(1, len(clip_query_times))
+    print(f"Avg CLIP query time: {avg_query_time:.4f}s")
 
     metrics = evaluate_metrics(
         caption_ids, image_ids, t2i_rank, t2i_scores, METRIC_KS
     )
-    print("SigLIP2 Text-to-Image metrics (ranx):")
+    print("CLIP Text-to-Image metrics (ranx):")
     for k in METRIC_KS:
         r = metrics[f"recall@{k}"]
         p = metrics[f"precision@{k}"]
@@ -172,11 +187,13 @@ def main():
         "meta": {
             "dataset_path": DATASET_PATH,
             "ann_path": ANN_PATH,
+            "prephrase_path": PREPHRASE_PATH,
             "model": MODEL_NAME,
             "pretrained": PRETRAINED,
             "image_batch": IMAGE_BATCH,
             "text_batch": TEXT_BATCH,
             "retrieve_k": RETRIEVE_K,
+            "rrf_k": RRF_K,
         },
         "images": images,
         "image_ids": image_ids,

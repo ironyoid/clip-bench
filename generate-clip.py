@@ -11,6 +11,7 @@ import faiss
 
 from ranx import Qrels, Run, evaluate
 from parsers import load_robo_dataset
+from gen_params import IMAGE_BATCH, TEXT_BATCH, RETRIEVE_K, METRIC_KS
 
 
 DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
@@ -18,11 +19,6 @@ ANN_PATH = f"{DATASET_PATH}/annotations/ground_truth/robotics_kitchen.json"
 
 MODEL_NAME = "ViT-L-14"
 PRETRAINED = "openai"
-
-IMAGE_BATCH = 64
-TEXT_BATCH = 256
-RETRIEVE_K = 40
-METRIC_KS = (1, 5, 40)
 
 OUTPUT_PATH = "dataset/robotics_kitchen_dataset_v3/clip_output/openclip-output.json"
 
