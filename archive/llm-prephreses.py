@@ -2,11 +2,11 @@ import json
 import ollama
 from tqdm import tqdm
 
-INPUT_PATH = "dataset/robotics_kitchen_dataset_v3/objects_caption.json"
-OUTPUT_PATH = "dataset/robotics_kitchen_dataset_v3/objects_caption_prephrases.json"
+INPUT_PATH = "../dataset/robotics_kitchen_dataset_v3/objects_caption.json"
+OUTPUT_PATH = "../dataset/robotics_kitchen_dataset_v3/objects_caption_prephrases.json"
 
-# MODEL = "gemma3:12b"
-MODEL = "gemma3:4b"
+MODEL = "gemma3:12b"
+# MODEL = "gemma3:4b"
 # MODEL = "phi3:mini"
 
 N = 4
