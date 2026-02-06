@@ -57,6 +57,28 @@ R@10: 0.15  P@10: 0.49  nDCG@10: 0.53
 MAP@10: 0.14
 ```
 
+## Coco2014 Kharpatov Split
+
+### Qwen COCO 5K T2I recalls:
+```
+R@1: 0.60
+R@5: 0.81
+R@10: 0.86
+```
+### Qwen ECCV T2I metrics:
+```
+Map@R: 0.41
+R-P: 0.49
+R@1: 0.89
+```
+
+### ALBEF ECCV T2I metrics:
+```
+Map@R: 0.41
+R-P: 0.50
+R@1: 0.87
+```
+
 **Avg CLIP query time:** `0.0002s`
 **Avg BLIP2 query time:** `1.2384s`
 

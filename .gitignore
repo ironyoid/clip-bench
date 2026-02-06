@@ -2,7 +2,7 @@ dataset
 dataset-backup
 .ipynb_checkpoints
 .vscode
-.venv
+.venv*
 __pycache__
 *.pdf
 LAVIS

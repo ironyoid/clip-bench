@@ -4,9 +4,9 @@ import eccv_caption
 import open_clip
 import torch
 from PIL import Image
-import json
 import time
 from tqdm import tqdm
+from parsers import load_karpathy_test
 
 
 DATASET_PATH = "dataset/coco2014"
@@ -16,26 +16,6 @@ PRETRAINED = "openai"
 IMAGE_BATCH = 64
 TEXT_BATCH = 256
 RETRIEVE_K = 100
-
-
-def load_karpathy_test(ann_path, coco_root):
-    data = json.load(open(ann_path, "r", encoding="utf-8"))
-    images = []
-    image_ids = []
-    captions = []
-    caption_ids = []
-
-    for img in data.get("images", []):
-        if img.get("split") != "test":
-            continue
-        img_path = f"{coco_root}/{img['filepath']}/{img['filename']}"
-        images.append(img_path)
-        image_ids.append(img["cocoid"])
-        for sent in img.get("sentences", []):
-            captions.append(sent["raw"].strip())
-            caption_ids.append(sent["sentid"])
-
-    return images, image_ids, captions, caption_ids
 
 
 def encode_images(model, preprocess, image_paths, batch_size, device):
@@ -84,7 +64,7 @@ def main():
     print(f"Using device: {device}")
 
     images, image_ids, captions, caption_ids = load_karpathy_test(
-        ANN_PATH, DATASET_PATH)
+        ANN_PATH, DATASET_PATH, single_caption=True)
     print(f"Test images: {len(images)}")
     print(f"Test captions: {len(captions)}")
 
@@ -114,6 +94,23 @@ def main():
     }
 
     metric = eccv_caption.Metrics()
+    keep_image_ids = set(image_ids)
+    keep_caption_ids = set(caption_ids)
+
+    def filter_gts(gts):
+        return {
+            "i2t": {
+                iid: [cid for cid in cids if cid in keep_caption_ids]
+                for iid, cids in gts["i2t"].items() if iid in keep_image_ids
+            },
+            "t2i": {
+                cid: [iid for iid in iids if iid in keep_image_ids]
+                for cid, iids in gts["t2i"].items() if cid in keep_caption_ids
+            },
+        }
+
+    metric.coco_gts = filter_gts(metric.coco_gts)
+    metric.eccv_gts = filter_gts(metric.eccv_gts)
     scores = metric.compute_all_metrics(
         i2t_retrieved_items=i2t,
         t2i_retrieved_items=t2i,
