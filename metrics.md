@@ -57,6 +57,9 @@ R@10: 0.15  P@10: 0.49  nDCG@10: 0.53
 MAP@10: 0.14
 ```
 
+### dino.txt
+
+
 ## Coco2014 Kharpatov Split
 
 ### Qwen COCO 5K T2I recalls:

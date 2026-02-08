@@ -9,7 +9,7 @@ from tqdm import tqdm
 from parsers import load_karpathy_test
 
 
-DATASET_PATH = "dataset/coco2014"
+DATASET_PATH = "../dataset/coco2014"
 ANN_PATH = f"{DATASET_PATH}/annotations/karpathy_test.json"
 MODEL_NAME = "ViT-L-14"
 PRETRAINED = "openai"
