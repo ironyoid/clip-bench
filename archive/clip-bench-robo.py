@@ -16,7 +16,7 @@ from lavis.models.albef_models.albef_retrieval import AlbefRetrieval
 from parsers import load_robo_dataset
 
 
-DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
+DATASET_PATH = "../dataset/robotics_kitchen_dataset_v3"
 ANN_PATH = f"{DATASET_PATH}/annotations/ground_truth/robotics_kitchen.json"
 MODEL_NAME = "ViT-L-14"
 PRETRAINED = "openai"
@@ -25,7 +25,7 @@ TEXT_BATCH = 256
 RETRIEVE_K = 10
 METRIC_KS = (1, 5, 10)
 ALBEF_IMAGE_BATCH = 64
-ALBEF_CFG_PATH = "configs/albef_retrieval_base.yaml"
+ALBEF_CFG_PATH = "../configs/albef_retrieval_base.yaml"
 
 
 def encode_images(model, preprocess, image_paths, batch_size, device):
