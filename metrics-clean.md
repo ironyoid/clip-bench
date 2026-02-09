@@ -71,3 +71,20 @@ MAP@10: 0.14
 ```
 
 ### CLIP (ViT-L-14, OpenAI pretrain) -> Qwen3-VL-Embedding (Qwen3-VL-Reranker-2B)
+
+
+
+
+
+CLIP -> ELIP-B
+```
+R@1: 0.02  P@1: 0.71  nDCG@1: 0.71
+R@5: 0.11  P@5: 0.67  nDCG@5: 0.68
+R@40: 0.53  P@40: 0.47  nDCG@40: 0.60
+MAP@40: 0.46
+```
+SigLIP -> ELIP-B
+R@1: 0.02  P@1: 0.71  nDCG@1: 0.71
+R@5: 0.10  P@5: 0.68  nDCG@5: 0.68
+R@40: 0.52  P@40: 0.44  nDCG@40: 0.57
+MAP@40: 0.44
