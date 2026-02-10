@@ -16,6 +16,11 @@ R@10: 0.84  R@1: 0.87
 ```
 
 ### CLIP (ViT-L-14, OpenAI pretrain) -> BLIP2 ITM (pretrain)
+```
+R@1: 0.63   Map@R: 0.42
+R@5: 0.83   R-P: 0.49
+R@10: 0.87  R@1: 0.92
+```
 
 ### CLIP (ViT-L-14, OpenAI pretrain) -> Qwen3-VL-Embedding (Qwen3-VL-Reranker-2B)
 ```
@@ -60,7 +65,7 @@ R@10: 0.19  P@10: 0.62  nDCG@10: 0.64
 MAP@10: 0.17
 ```
 
-## LLM (gemma3:4b) enriched captions (N=4, T=2) 
+## LLM (gemma3:4b) enriched captions (N=4, T=2)
 
 ### CLIP (ViT-L-14, OpenAI pretrain) -> BLIP2 ITM (pretrain)
 ```
