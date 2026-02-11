@@ -12,6 +12,7 @@ from torchvision import transforms
 from ranx import Qrels, Run, evaluate
 from parsers import load_robo_dataset
 from gen_params import IMAGE_BATCH, TEXT_BATCH, RETRIEVE_K, METRIC_KS
+from visualize import visualize_topk
 from dinov2.hub.dinotxt import (
     dinov2_vitl14_reg4_dinotxt_tet1280d20h24l,
     get_tokenizer,
@@ -25,10 +26,12 @@ MODEL_NAME = "dinov2_vitl14_reg4_dinotxt_tet1280d20h24l"
 
 OUTPUT_PATH = "dataset/robotics_kitchen_dataset_v3/clip_output/dinotxt-output.json"
 
+
 def build_preprocess():
     return transforms.Compose(
         [
-            transforms.Resize(224, interpolation=transforms.InterpolationMode.BICUBIC),
+            transforms.Resize(
+                224, interpolation=transforms.InterpolationMode.BICUBIC),
             transforms.CenterCrop(224),
             transforms.ToTensor(),
             transforms.Normalize(
@@ -132,6 +135,7 @@ def main():
     print(f"Images: {len(images)}")
     print(f"Captions: {len(captions)}")
 
+    print("Loading DINOv2-DinoTxt model (this may take a minute)...")
     model = dinov2_vitl14_reg4_dinotxt_tet1280d20h24l().to(device)
     model.eval()
     tokenizer = get_tokenizer()
@@ -164,6 +168,9 @@ def main():
         n = metrics[f"ndcg@{k}"]
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
     print(f"MAP@{max(METRIC_KS)}: {metrics[f'map@{max(METRIC_KS)}']:.2f}")
+
+    visualize_topk(captions, images, t2i_rank,
+                   caption_ids, image_ids, model_name="dinotxt")
 
     os.makedirs(os.path.dirname(OUTPUT_PATH), exist_ok=True)
     out = {

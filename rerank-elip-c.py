@@ -1,3 +1,6 @@
+from open_clip.factory import load_checkpoint as oc_load_checkpoint
+from open_clip import create_model_and_transforms, get_tokenizer
+import open_clip.factory as _oc_factory
 import json
 import os
 import sys
@@ -12,17 +15,9 @@ from ranx import Qrels, Run, evaluate
 from gen_params import METRIC_KS, TEXT_BATCH
 from visualize import visualize_topk
 
-# Add ELIP-C source to path BEFORE importing open_clip
-# so that Python loads the ELIP-C fork (with VPT support) instead of the
-# vanilla open_clip package installed in site-packages.
 sys.path.insert(0, 'reqs/ELIP/ELIP-C/src')
 
-import open_clip.factory as _oc_factory  # noqa: E402
-from open_clip import create_model_and_transforms, get_tokenizer  # noqa: E402
-from open_clip.factory import load_checkpoint as oc_load_checkpoint  # noqa: E402
 
-# Inject ViT-B-16 model config with text-guided VPT before open_clip scans
-# (the model_configs/ directory is missing from the repo)
 _oc_factory._MODEL_CONFIGS['ViT-B-16'] = {
     "embed_dim": 512,
     "init_logit_scale": 4.6052,
@@ -57,7 +52,6 @@ CHECKPOINT_PATH = "reqs/12.15_v2_2024_12_15-07_14_55-model_ViT-B-16-lr_0.001-b_2
 
 
 def elipc_rerank(model, preprocess, tokenizer, captions, image_paths, t2i_rank, batch_size, device):
-    # --- preprocess images ---
     processed_images = []
     total = len(image_paths)
     batch_start = time.time()
@@ -67,7 +61,6 @@ def elipc_rerank(model, preprocess, tokenizer, captions, image_paths, t2i_rank, 
     batch_time = time.time() - batch_start
     print(f"ELIP-C preprocess: {total} in {batch_time:.3f}s")
 
-    # --- encode all captions ---
     all_text_embeds = []
     batch_start = time.time()
     for i in tqdm(range(0, len(captions), TEXT_BATCH), desc="ELIP-C text encode"):
@@ -80,7 +73,6 @@ def elipc_rerank(model, preprocess, tokenizer, captions, image_paths, t2i_rank, 
     batch_time = time.time() - batch_start
     print(f"ELIP-C text encode: {len(captions)} in {batch_time:.3f}s")
 
-    # --- rerank: for each query, encode candidate images with text guidance ---
     reranked = []
     reranked_scores = []
     total_caps = len(captions)
@@ -101,7 +93,6 @@ def elipc_rerank(model, preprocess, tokenizer, captions, image_paths, t2i_rank, 
                     text_embed=text_embed_batch,
                     normalize=True,
                 )
-            # score = dot product (cosine sim, both are normalized)
             chunk_scores = (text_embed_batch * image_features).sum(dim=-1)
             scores.append(chunk_scores.float().cpu())
         scores = torch.cat(scores, dim=0)
@@ -171,7 +162,6 @@ def main():
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # Create model (loads base CLIP pretrained weights + text-guided VPT architecture)
     model, _, preprocess_val = create_model_and_transforms(
         'ViT-B-16',
         pretrained='datacomp_xl_s13b_b90k',
@@ -180,15 +170,14 @@ def main():
         output_dict=True,
     )
 
-    # Load ELIP-C checkpoint on top
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu', weights_only=False)
+    checkpoint = torch.load(
+        CHECKPOINT_PATH, map_location='cpu', weights_only=False)
     if 'state_dict' in checkpoint:
         sd = checkpoint['state_dict']
     elif 'model' in checkpoint:
         sd = checkpoint['model']
     else:
         sd = checkpoint
-    # Strip 'module.' prefix if present (from DDP training)
     if next(iter(sd.keys())).startswith('module.'):
         sd = {k[len('module.'):]: v for k, v in sd.items()}
     model.load_state_dict(sd, strict=False)
@@ -219,7 +208,8 @@ def main():
     print(
         f"MAP@{max(METRIC_KS)}: {elipc_metrics[f'map@{max(METRIC_KS)}']:.2f}")
 
-    visualize_topk(captions, images, t2i_rank_elipc, caption_ids, image_ids, model_name="elip-c")
+    visualize_topk(captions, images, t2i_rank_elipc,
+                   caption_ids, image_ids, model_name="elip-c")
 
 
 if __name__ == "__main__":
