@@ -12,6 +12,7 @@ import faiss
 from ranx import Qrels, Run, evaluate
 from parsers import load_robo_dataset
 from gen_params import IMAGE_BATCH, TEXT_BATCH, RETRIEVE_K, METRIC_KS
+from visualize import visualize_topk
 
 
 DATASET_PATH = "dataset/robotics_kitchen_dataset_v3"
@@ -171,6 +172,8 @@ def main():
     }
     json.dump(out, open(OUTPUT_PATH, "w", encoding="utf-8"), indent=2)
     print(f"Saved: {OUTPUT_PATH}")
+
+    visualize_topk(captions, images, t2i_rank, caption_ids, image_ids, model_name="clip")
 
 
 if __name__ == "__main__":

@@ -8,10 +8,11 @@ import torch
 
 from ranx import Qrels, Run, evaluate
 from lavis.models import load_model_and_preprocess
+from gen_params import METRIC_KS
+from visualize import visualize_topk
 
 
 BLIP2_IMAGE_BATCH = 2
-METRIC_KS = (1, 5, 40)
 
 
 def blip2_rerank(blip2_model, blip2_vis, blip2_txt, captions, image_paths, t2i_rank, batch_size, device):
@@ -138,6 +139,8 @@ def main():
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
     print(
         f"MAP@{max(METRIC_KS)}: {blip2_metrics[f'map@{max(METRIC_KS)}']:.2f}")
+
+    visualize_topk(captions, images, t2i_rank_blip2, caption_ids, image_ids, model_name="blip2")
 
 
 if __name__ == "__main__":

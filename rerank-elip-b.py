@@ -8,13 +8,14 @@ import torch
 import torch.nn.functional as F
 
 from ranx import Qrels, Run, evaluate
+from gen_params import METRIC_KS, TEXT_BATCH
+from visualize import visualize_topk
 
 sys.path.insert(0, 'reqs/ELIP/ELIP-B')
 from lavis.models import load_model_and_preprocess
 
 
 ELIP_IMAGE_BATCH = 8
-METRIC_KS = (1, 5, 40)
 CHECKPOINT_PATH = "reqs/full_model_iccv_v27-20241229044-checkpoint_0.pth"
 
 
@@ -29,13 +30,12 @@ def elip_rerank(elip_model, elip_vis, captions, image_paths, t2i_rank, batch_siz
     print(f"ELIP preprocess: {total} in {batch_time:.3f}s")
 
     tokenizer = elip_model.tokenizer
-    text_bs = 256
     all_text_ids = []
     all_text_atts = []
     all_text_embeds = []
     batch_start = time.time()
-    for i in tqdm(range(0, len(captions), text_bs), desc="ELIP text encode"):
-        batch_captions = captions[i:i + text_bs]
+    for i in tqdm(range(0, len(captions), TEXT_BATCH), desc="ELIP text encode"):
+        batch_captions = captions[i:i + TEXT_BATCH]
         text_tokens = tokenizer(
             batch_captions,
             padding="max_length",
@@ -43,7 +43,7 @@ def elip_rerank(elip_model, elip_vis, captions, image_paths, t2i_rank, batch_siz
             max_length=elip_model.max_txt_len,
             return_tensors="pt",
         ).to(device)
-        with torch.no_grad():
+        with torch.no_grad(), torch.amp.autocast(device_type=device, dtype=torch.float16):
             text_feat = elip_model.forward_text(text_tokens)
             text_embed = F.normalize(elip_model.text_proj(text_feat))
         all_text_ids.append(text_tokens.input_ids.cpu())
@@ -72,7 +72,7 @@ def elip_rerank(elip_model, elip_vis, captions, image_paths, t2i_rank, batch_siz
             text_ids_batch = text_ids_i.unsqueeze(0).expand(chunk_size, -1).to(device)
             text_atts_batch = text_atts_i.unsqueeze(0).expand(chunk_size, -1).to(device)
             text_embeds_batch = text_embeds_i.unsqueeze(0).expand(chunk_size, -1).to(device)
-            with torch.no_grad():
+            with torch.no_grad(), torch.amp.autocast(device_type=device, dtype=torch.float16):
                 itm_scores = elip_model.compute_itm_tgvpt(
                     image_inputs=images,
                     text_ids=text_ids_batch,
@@ -147,15 +147,23 @@ def main():
     ) else "mps" if torch.backends.mps.is_available() else "cpu"
     print(f"Using device: {device}")
 
+    # Load model on CPU first to minimise peak GPU memory
     elip_model, elip_vis, _ = load_model_and_preprocess(
         name="blip2_less_noisy_also_itm_head_multi_prompt3",
         model_type="coco",
         is_eval=True,
-        device=device,
+        device="cpu",
     )
 
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location=device)
-    elip_model.load_state_dict(checkpoint["model"], strict=False)
+    checkpoint = torch.load(CHECKPOINT_PATH, map_location="cpu")
+    info = elip_model.load_state_dict(checkpoint["model"], strict=False)
+    del checkpoint
+    if info.missing_keys:
+        print(f"WARNING: missing keys ({len(info.missing_keys)}): {info.missing_keys[:10]}")
+    if info.unexpected_keys:
+        print(f"INFO: unexpected keys ({len(info.unexpected_keys)}): {info.unexpected_keys[:10]}")
+
+    elip_model = elip_model.to(device)
     elip_model.eval()
 
     t2i_rank_elip, t2i_scores_elip = elip_rerank(
@@ -178,6 +186,8 @@ def main():
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
     print(
         f"MAP@{max(METRIC_KS)}: {elip_metrics[f'map@{max(METRIC_KS)}']:.2f}")
+
+    visualize_topk(captions, images, t2i_rank_elip, caption_ids, image_ids, model_name="elip-b")
 
 
 if __name__ == "__main__":
