@@ -17,24 +17,25 @@ def visualize_topk(captions, images, ranked_indices, caption_ids, image_ids, mod
 
         grid_w = cols * tile_size
 
-        # build caption header
         font = cv2.FONT_HERSHEY_SIMPLEX
         text = f"[{i+1}/{len(captions)}] {caption}"
         header_h = 32
         header = np.zeros((header_h, grid_w, 3), dtype=np.uint8)
-        cv2.putText(header, text, (8, 22), font, 0.55, (255, 255, 255), 1, cv2.LINE_AA)
+        cv2.putText(header, text, (8, 22), font, 0.55,
+                    (255, 255, 255), 1, cv2.LINE_AA)
 
-        # build image grid
         grid_h = rows * tile_size
         grid = np.zeros((grid_h, grid_w, 3), dtype=np.uint8)
         for j, idx in enumerate(top):
-            img = Image.open(images[idx]).convert("RGB").resize((tile_size, tile_size), Image.BICUBIC)
-            tile = np.array(img)[:, :, ::-1]  # RGB -> BGR
+            img = Image.open(images[idx]).convert("RGB").resize(
+                (tile_size, tile_size), Image.BICUBIC)
+            tile = np.array(img)[:, :, ::-1]
             r, c = j // cols, j % cols
             y, x = r * tile_size, c * tile_size
             grid[y:y + tile_size, x:x + tile_size] = tile
             if image_ids[idx] == query_obj:
-                cv2.rectangle(grid, (x + 1, y + 1), (x + tile_size - 2, y + tile_size - 2), (0, 255, 0), 3)
+                cv2.rectangle(grid, (x + 1, y + 1), (x + tile_size -
+                              2, y + tile_size - 2), (0, 255, 0), 3)
 
         canvas = np.vstack([header, grid])
 
@@ -43,7 +44,8 @@ def visualize_topk(captions, images, ranked_indices, caption_ids, image_ids, mod
             key = cv2.waitKey(0) & 0xFF
             if key == ord('p'):
                 os.makedirs(SAVE_DIR, exist_ok=True)
-                path = os.path.join(SAVE_DIR, f"query_{i:04d}-{model_name}.png")
+                path = os.path.join(
+                    SAVE_DIR, f"query_{i:04d}-{model_name}.png")
                 cv2.imwrite(path, canvas)
                 print(f"Saved: {path}")
                 continue
