@@ -9,6 +9,8 @@ import torch
 import torch.nn.functional as F
 
 from ranx import Qrels, Run, evaluate
+from gen_params import METRIC_KS, TEXT_BATCH
+from visualize import visualize_topk
 
 # Add ELIP-C source to path BEFORE importing open_clip
 # so that Python loads the ELIP-C fork (with VPT support) instead of the
@@ -51,7 +53,6 @@ _oc_factory._MODEL_CONFIGS['ViT-B-16'] = {
 
 
 ELIPC_IMAGE_BATCH = 64
-METRIC_KS = (1, 5, 40)
 CHECKPOINT_PATH = "reqs/12.15_v2_2024_12_15-07_14_55-model_ViT-B-16-lr_0.001-b_20-j_8-p_amp-epoch_1.pt"
 
 
@@ -67,11 +68,10 @@ def elipc_rerank(model, preprocess, tokenizer, captions, image_paths, t2i_rank, 
     print(f"ELIP-C preprocess: {total} in {batch_time:.3f}s")
 
     # --- encode all captions ---
-    text_bs = 256
     all_text_embeds = []
     batch_start = time.time()
-    for i in tqdm(range(0, len(captions), text_bs), desc="ELIP-C text encode"):
-        batch_captions = captions[i:i + text_bs]
+    for i in tqdm(range(0, len(captions), TEXT_BATCH), desc="ELIP-C text encode"):
+        batch_captions = captions[i:i + TEXT_BATCH]
         text_tokens = tokenizer(batch_captions).to(device)
         with torch.no_grad():
             text_embed = model.encode_text(text_tokens, normalize=True)
@@ -218,6 +218,8 @@ def main():
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
     print(
         f"MAP@{max(METRIC_KS)}: {elipc_metrics[f'map@{max(METRIC_KS)}']:.2f}")
+
+    visualize_topk(captions, images, t2i_rank_elipc, caption_ids, image_ids, model_name="elip-c")
 
 
 if __name__ == "__main__":

@@ -5,6 +5,8 @@ import time
 from tqdm import tqdm
 
 from ranx import Qrels, Run, evaluate
+from gen_params import METRIC_KS
+from visualize import visualize_topk
 
 sys.path.insert(0, "reqs/Qwen3-VL-Embedding")
 from src.models.qwen3_vl_reranker import Qwen3VLReranker
@@ -12,7 +14,6 @@ from src.models.qwen3_vl_reranker import Qwen3VLReranker
 
 QWEN_MODEL = "Qwen/Qwen3-VL-Reranker-2B"
 QWEN_BATCH = 4
-METRIC_KS = (1, 5, 10)
 
 
 def qwen_rerank(qwen_model, captions, image_paths, t2i_rank, batch_size):
@@ -103,6 +104,8 @@ def main():
         print(f"R@{k}: {r:.2f}  P@{k}: {p:.2f}  nDCG@{k}: {n:.2f}")
     print(
         f"MAP@{max(METRIC_KS)}: {qwen_metrics[f'map@{max(METRIC_KS)}']:.2f}")
+
+    visualize_topk(captions, images, t2i_rank_qwen, caption_ids, image_ids, model_name="qwen")
 
 
 if __name__ == "__main__":
