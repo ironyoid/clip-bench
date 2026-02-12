@@ -1,0 +1,13 @@
+\usepackage{lmodern}
+\usepackage[T1]{fontenc}
+\usepackage{graphicx}
+\usepackage{float}
+\let\oldincludegraphics\includegraphics
+\renewcommand{\includegraphics}[2][]{\oldincludegraphics[width=\textwidth,height=0.19\textheight,keepaspectratio]{#2}}
+\usepackage{caption}
+\captionsetup[figure]{labelformat=empty,textformat=empty,skip=0pt}
+\setlength{\intextsep}{2pt}
+\setlength{\floatsep}{2pt}
+\setlength{\textfloatsep}{2pt}
+\setlength{\abovecaptionskip}{0pt}
+\setlength{\belowcaptionskip}{0pt}
