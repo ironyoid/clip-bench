@@ -26,6 +26,7 @@ def load_karpathy_test(ann_path, coco_root, single_caption=False):
     image_ids = []
     captions = []
     caption_ids = []
+    caption_image_ids = []
 
     for img in data.get("images", []):
         if img.get("split") != "test":
@@ -40,12 +41,14 @@ def load_karpathy_test(ann_path, coco_root, single_caption=False):
             sent = sents[0]
             captions.append(sent["raw"].strip())
             caption_ids.append(sent["sentid"])
+            caption_image_ids.append(img["cocoid"])
         else:
             for sent in sents:
                 captions.append(sent["raw"].strip())
                 caption_ids.append(sent["sentid"])
+                caption_image_ids.append(img["cocoid"])
 
-    return images, image_ids, captions, caption_ids
+    return images, image_ids, captions, caption_ids, caption_image_ids
 
 
 def load_robo_dataset(ann_path, coco_root, prephrase_path=None):

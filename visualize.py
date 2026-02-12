@@ -7,13 +7,12 @@ from PIL import Image
 SAVE_DIR = "viz_output"
 
 
-def visualize_topk(captions, images, ranked_indices, caption_ids, image_ids, model_name="model", k=10, tile_size=160, cols=5):
-    """Show top-K images per query in a grid. Green border = match. Any key = next, 'p' = save, 'q' = quit."""
+def visualize_topk(captions, images, ranked_indices, caption_match_ids, image_ids, model_name="model", k=10, tile_size=160, cols=5):
     rows = (k + cols - 1) // cols
 
     for i, caption in enumerate(captions):
         top = ranked_indices[i][:k]
-        query_obj = caption_ids[i]
+        query_obj = caption_match_ids[i]
 
         grid_w = cols * tile_size
 
@@ -45,7 +44,7 @@ def visualize_topk(captions, images, ranked_indices, caption_ids, image_ids, mod
             if key == ord('p'):
                 os.makedirs(SAVE_DIR, exist_ok=True)
                 path = os.path.join(
-                    SAVE_DIR, f"query_{i:04d}-{model_name}.png")
+                    SAVE_DIR, f"{i+1:04d}_{model_name}.png")
                 cv2.imwrite(path, canvas)
                 print(f"Saved: {path}")
                 continue
