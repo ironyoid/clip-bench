@@ -2,6 +2,7 @@ import json
 import os
 import pickle
 
+import cv2
 import numpy as np
 from PIL import Image
 
@@ -51,7 +52,7 @@ def load_karpathy_test(ann_path, coco_root, single_caption=False):
     return images, image_ids, captions, caption_ids, caption_image_ids
 
 
-def load_robo_dataset(ann_path, coco_root, prephrase_path=None):
+def load_robo_dataset(ann_path, coco_root, prephrase_path=None, padding=0):
     data = json.load(open(ann_path, "r", encoding="utf-8"))
     object_caption_path = os.path.join(coco_root, "objects_caption.json")
     if prephrase_path and os.path.exists(prephrase_path):
@@ -77,24 +78,29 @@ def load_robo_dataset(ann_path, coco_root, prephrase_path=None):
             frame_num = int(mask_name.replace(
                 ".pkl", "").split("_")[0].replace("frame", ""))
             object_id = int(mask_info["object_id"])
+            pad_suffix = f"_pad{padding}" if padding > 0 else ""
             out_path = os.path.join(
-                masked_objects_dir, f"frame{frame_num}_obj{object_id}.jpg")
-            if not os.path.exists(out_path):
-                frame_path = os.path.join(
-                    coco_root, "frames", "robotics_kitchen", f"{frame_num - 1}.jpg"
-                )
-                mask_path = os.path.join(
-                    coco_root, "mask_cache", mask_rel_path)
+                masked_objects_dir, f"frame{frame_num}_obj{object_id}{pad_suffix}.jpg")
+            frame_path = os.path.join(
+                coco_root, "frames", "robotics_kitchen", f"{frame_num - 1}.jpg"
+            )
+            mask_path = os.path.join(
+                coco_root, "mask_cache", mask_rel_path)
 
-                image = np.array(Image.open(frame_path).convert("RGB"))
-                rle = pickle.load(open(mask_path, "rb"))
-                mask = decode_uncompressed_rle(rle).astype(bool)
+            image = np.array(Image.open(frame_path).convert("RGB"))
+            rle = pickle.load(open(mask_path, "rb"))
+            mask = decode_uncompressed_rle(rle).astype(bool)
 
-                masked = np.zeros_like(image)
-                masked[mask] = image[mask]
-                ys, xs = np.where(mask)
-                crop = masked[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
-                Image.fromarray(crop).save(out_path)
+            if padding > 0:
+                kernel = cv2.getStructuringElement(
+                    cv2.MORPH_ELLIPSE, (2 * padding + 1, 2 * padding + 1))
+                mask = cv2.dilate(mask.astype(np.uint8), kernel).astype(bool)
+
+            masked = np.zeros_like(image)
+            masked[mask] = image[mask]
+            ys, xs = np.where(mask)
+            crop = masked[ys.min():ys.max() + 1, xs.min():xs.max() + 1]
+            Image.fromarray(crop).save(out_path)
 
             images.append(out_path)
             image_ids.append(object_id)

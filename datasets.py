@@ -17,11 +17,11 @@ DATASET_CONFIGS = {
 }
 
 
-def load_dataset(name):
+def load_dataset(name, padding=0):
     cfg = DATASET_CONFIGS[name]
     if name == "robo":
         images, image_ids, captions, caption_ids = load_robo_dataset(
-            cfg["ann_path"], cfg["dataset_path"])
+            cfg["ann_path"], cfg["dataset_path"], padding=padding)
         caption_match_ids = caption_ids
     elif name == "coco":
         images, image_ids, captions, caption_ids, caption_match_ids = load_karpathy_test(
