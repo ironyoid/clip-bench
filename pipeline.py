@@ -33,6 +33,8 @@ def main():
     parser.add_argument("--metrics", default="ranx", choices=["ranx", "eccv"])
     parser.add_argument("--visualize", action="store_true")
     parser.add_argument("--save", help="Path to save JSON output")
+    parser.add_argument("--padding", type=int, default=0,
+                        help="Mask padding in pixels (robo dataset only)")
     parser.add_argument("-n", type=int, help="Limit to first N queries")
     args = parser.parse_args()
 
@@ -67,7 +69,7 @@ def main():
         print(f"Loaded from {args.input}: {len(dataset.images)} images, {len(dataset.captions)} captions")
     else:
         from datasets import load_dataset
-        dataset = load_dataset(args.dataset)
+        dataset = load_dataset(args.dataset, padding=args.padding)
         if n:
             dataset = Dataset(
                 dataset.images, dataset.image_ids,
@@ -126,6 +128,8 @@ def main():
         from visualize import visualize_topk
         parts = [args.dataset or "input", args.generator or "input"]
         parts.append(args.reranker or "norerank")
+        if args.padding:
+            parts.append(f"pad{args.padding}")
         model_name = "_".join(parts)
         visualize_topk(dataset.captions, dataset.images, t2i_rank,
                        dataset.caption_match_ids, dataset.image_ids,
@@ -139,6 +143,7 @@ def main():
                 "generator": args.generator,
                 "reranker": args.reranker,
                 "metrics_type": args.metrics,
+                "padding": args.padding,
             },
             "images": dataset.images,
             "image_ids": dataset.image_ids,
