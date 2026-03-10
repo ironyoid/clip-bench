@@ -1,0 +1,81 @@
+clip:
+  type: article
+  title: "Learning Transferable Visual Models From Natural Language Supervision"
+  author: ["Radford, Alec", "Kim, Jong Wook", "Hallacy, Chris", "Ramesh, Aditya", "Goh, Gabriel", "Agarwal, Sandhini", "Sastry, Girish", "Askell, Amanda", "Mishkin, Pamela", "Clark, Jack", "Krueger, Gretchen", "Sutskever, Ilya"]
+  date: 2021
+  serial-number:
+    arxiv: "2103.00020"
+  parent:
+    type: proceedings
+    title: "International Conference on Machine Learning (ICML)"
+
+dinov2:
+  type: article
+  title: "DINOv2: Learning Robust Visual Features without Supervision"
+  author: ["Oquab, Maxime", "Darcet, Timothée", "Moutakanni, Théo", "Vo, Huy", "Szafraniec, Marc", "Khalidov, Vasil", "Fernandez, Pierre", "Haziza, Daniel", "Massa, Francisco", "El-Nouby, Alaaeldin", "Assran, Mahmoud", "Ballas, Nicolas", "Galuba, Wojciech", "Howes, Russell", "Huang, Po-Yao", "Li, Shang-Wen", "Misra, Ishan", "Rabbat, Michael", "Sharma, Vasu", "Synnaeve, Gabriel", "Xu, Hu", "Jégou, Hervé", "Mairal, Julien", "Labatut, Patrick", "Joulin, Armand", "Bojanowski, Piotr"]
+  date: 2024
+  serial-number:
+    arxiv: "2304.07193"
+  parent:
+    type: periodical
+    title: "Transactions on Machine Learning Research"
+
+dinotxt:
+  type: article
+  title: "DINOv2 Meets Text: A Unified Framework for Image- and Pixel-Level Vision-Language Alignment"
+  author: ["Darcet, Timothée", "Oquab, Maxime", "Mairal, Julien", "Bojanowski, Piotr"]
+  date: 2024
+  serial-number:
+    arxiv: "2405.19220"
+
+blip2:
+  type: article
+  title: "BLIP-2: Bootstrapping Language-Image Pre-training with Frozen Image Encoders and Large Language Models"
+  author: ["Li, Junnan", "Li, Dongxu", "Savarese, Silvio", "Hoi, Steven"]
+  date: 2023
+  serial-number:
+    arxiv: "2301.12597"
+  parent:
+    type: proceedings
+    title: "International Conference on Machine Learning (ICML)"
+
+albef:
+  type: article
+  title: "Align before Fuse: Vision and Language Representation Learning with Momentum Distillation"
+  author: ["Li, Junnan", "Selvaraju, Ramprasaath R.", "Gotmare, Akhilesh", "Joty, Shafiq", "Xiong, Caiming", "Hoi, Steven"]
+  date: 2021
+  serial-number:
+    arxiv: "2107.07651"
+  parent:
+    type: proceedings
+    title: "Advances in Neural Information Processing Systems (NeurIPS)"
+
+siglip:
+  type: article
+  title: "Sigmoid Loss for Language Image Pre-Training"
+  author: ["Zhai, Xiaohua", "Mustafa, Basil", "Kolesnikov, Alexander", "Beyer, Lucas"]
+  date: 2023
+  serial-number:
+    arxiv: "2303.15343"
+  parent:
+    type: proceedings
+    title: "International Conference on Computer Vision (ICCV)"
+
+qwen:
+  type: article
+  title: "Qwen2.5-VL Technical Report"
+  author: ["Bai, Shuai", "Chen, Keqin", "Liu, Xuejing", "Wang, Jialin", "Ge, Wenbin", "Song, Shuicheng", "Lu, Kai", "Wang, Junyang"]
+  date: 2025
+  serial-number:
+    arxiv: "2502.13923"
+
+elip:
+  type: article
+  title: "ELIP: Enhanced Language-Image Pre-training with Efficient Visual Tuning"
+  author: ["Xie, Yongjian", "Bao, Jiahao", "Tang, Ming", "Wang, Jinqiao"]
+  date: 2024
+  serial-number:
+    arxiv: "2309.16839"
+  parent:
+    type: proceedings
+    title: "International Conference on Computer Vision (ICCV)"
